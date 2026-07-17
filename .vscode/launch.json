@@ -13,8 +13,7 @@
       "windows": {
         "runtimeExecutable": "${workspaceFolder}/node_modules/.bin/electron.cmd"
       },
-      "cwd": "${workspaceFolder}",
-      "protocol": "inspector"
+      "cwd": "${workspaceFolder}"
     },
     {
       "type": "chrome",
