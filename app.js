@@ -953,7 +953,7 @@ function syncTextAnnotations() {
         textItem.style.color = ann.color;
         textItem.style.fontSize = `${ann.size * state.scale}px`;
         textItem.style.textAlign = ann.align || 'left';
-        textItem.textContent = ann.content;
+        textItem.innerText = ann.content;
         
         if (state.selectedAnnotation && state.selectedAnnotation.id === ann.id) {
             textItem.classList.add('selected');
@@ -975,7 +975,7 @@ function syncTextAnnotations() {
         // Blur ends editing
         textItem.addEventListener('blur', () => {
             textItem.contentEditable = false;
-            const textContent = textItem.textContent.trim();
+            const textContent = textItem.innerText.trim();
             if (textContent === '') {
                 // Remove if empty
                 saveHistory();
@@ -1525,18 +1525,35 @@ async function exportStandardPDF() {
                 // Standard default scale page width is typically 595.27 points (A4)
                 const baseTextSize = ann.size * (width / 612); // Adjust text size relative to width scale ratio
                 
-                // Offset baseline down so top-left aligns nicely
-                const offsetTextPos = {
-                    x: textPos.x,
-                    y: textPos.y - baseTextSize
-                };
+                const lines = ann.content.split('\n');
+                let maxLineWidth = 0;
+                lines.forEach(line => {
+                    const w = helveticaFont.widthOfTextAtSize(line, baseTextSize);
+                    if (w > maxLineWidth) maxLineWidth = w;
+                });
                 
-                page.drawText(ann.content, {
-                    x: offsetTextPos.x,
-                    y: offsetTextPos.y,
-                    size: baseTextSize,
-                    font: helveticaFont,
-                    color: PDFLib.rgb(colorRGB.r, colorRGB.g, colorRGB.b)
+                const lineHeight = baseTextSize * 1.2;
+                
+                lines.forEach((line, idx) => {
+                    const lineWidth = helveticaFont.widthOfTextAtSize(line, baseTextSize);
+                    let lineX = textPos.x;
+                    
+                    if (ann.align === 'center') {
+                        lineX = textPos.x + (maxLineWidth - lineWidth) / 2;
+                    } else if (ann.align === 'right') {
+                        lineX = textPos.x + (maxLineWidth - lineWidth);
+                    }
+                    
+                    // PDF coordinates: Y increases upwards, so we subtract Y for subsequent lines
+                    const lineY = textPos.y - baseTextSize - (idx * lineHeight);
+                    
+                    page.drawText(line, {
+                        x: lineX,
+                        y: lineY,
+                        size: baseTextSize,
+                        font: helveticaFont,
+                        color: PDFLib.rgb(colorRGB.r, colorRGB.g, colorRGB.b)
+                    });
                 });
             }
         }
@@ -1610,7 +1627,24 @@ async function exportFlattenedPDF() {
                 const tx = (ann.x / 100) * tempCanvas.width;
                 const ty = (ann.y / 100) * tempCanvas.height;
                 
-                ctx.fillText(ann.content, tx, ty);
+                const lines = ann.content.split('\n');
+                let maxLineWidth = 0;
+                lines.forEach(line => {
+                    const w = ctx.measureText(line).width;
+                    if (w > maxLineWidth) maxLineWidth = w;
+                });
+                
+                let lineTx = tx;
+                if (ctx.textAlign === 'center') {
+                    lineTx = tx + maxLineWidth / 2;
+                } else if (ctx.textAlign === 'right') {
+                    lineTx = tx + maxLineWidth;
+                }
+                
+                const lineHeight = canvasFontSize * 1.2;
+                lines.forEach((line, idx) => {
+                    ctx.fillText(line, lineTx, ty + (idx * lineHeight));
+                });
             }
         });
         ctx.globalAlpha = 1.0; // Reset
