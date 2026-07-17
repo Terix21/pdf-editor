@@ -1187,12 +1187,31 @@ function getAnnotationAt(x, y) {
     for (let i = annotations.length - 1; i >= 0; i--) {
         const ann = annotations[i];
         
-        if (ann.type === 'highlight' || ann.type === 'redact' || ann.type === 'text') {
-            // Check bounding box
-            const w = ann.w || 8; // Estimate text width if missing
-            const h = ann.h || 4;
-            if (x >= ann.x && x <= ann.x + w && y >= ann.y && y <= ann.y + h) {
+        if (ann.type === 'highlight' || ann.type === 'redact') {
+            if (x >= ann.x && x <= ann.x + ann.w && y >= ann.y && y <= ann.y + ann.h) {
                 return ann;
+            }
+        } 
+        else if (ann.type === 'text') {
+            const textEl = els.textOverlayLayer.querySelector(`[data-id="${ann.id}"]`);
+            if (textEl) {
+                const elRect = textEl.getBoundingClientRect();
+                const pageRect = els.pageContainer.getBoundingClientRect();
+                
+                const elLeft = ((elRect.left - pageRect.left) / pageRect.width) * 100;
+                const elTop = ((elRect.top - pageRect.top) / pageRect.height) * 100;
+                const elWidth = (elRect.width / pageRect.width) * 100;
+                const elHeight = (elRect.height / pageRect.height) * 100;
+                
+                if (x >= elLeft && x <= elLeft + elWidth && y >= elTop && y <= elTop + elHeight) {
+                    return ann;
+                }
+            } else {
+                const w = 8;
+                const h = 4;
+                if (x >= ann.x && x <= ann.x + w && y >= ann.y && y <= ann.y + h) {
+                    return ann;
+                }
             }
         } 
         else if (ann.type === 'draw') {
