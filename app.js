@@ -881,7 +881,7 @@ function redrawAnnotations() {
         
         if (ann.type === 'draw') {
             ctx.strokeStyle = ann.color;
-            ctx.lineWidth = ann.thickness;
+            ctx.lineWidth = ann.thickness * state.scale;
             ctx.globalAlpha = ann.opacity || 1.0;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
@@ -1084,7 +1084,7 @@ function handleMouseMove(e) {
             // Immediate sketch lines
             redrawAnnotations();
             ctx.strokeStyle = state.activeColor;
-            ctx.lineWidth = (state.activeThickness / 100) * els.annotationCanvas.width;
+            ctx.lineWidth = state.activeThickness * state.scale;
             ctx.globalAlpha = state.activeOpacity / 100;
             ctx.lineCap = 'round';
             ctx.lineJoin = 'round';
@@ -1576,7 +1576,7 @@ async function exportFlattenedPDF() {
         annotations.forEach(ann => {
             if (ann.type === 'draw') {
                 ctx.strokeStyle = ann.color;
-                ctx.lineWidth = (ann.thickness / 100) * tempCanvas.width;
+                ctx.lineWidth = ann.thickness * renderScale;
                 ctx.globalAlpha = ann.opacity || 1.0;
                 ctx.lineCap = 'round';
                 ctx.lineJoin = 'round';
