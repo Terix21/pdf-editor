@@ -1,0 +1,35 @@
+{
+  "name": "ghostedit",
+  "version": "1.0.0",
+  "description": "Secure Client-side PDF Editor & Redactor",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "author": "GhostEdit Developer",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.ghostedit.app",
+    "productName": "GhostEdit",
+    "files": [
+      "index.html",
+      "app.js",
+      "styles.css",
+      "sample.pdf",
+      "main.js"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": true,
+      "createDesktopShortcut": true,
+      "runAfterFinish": true
+    }
+  }
+}
