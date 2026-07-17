@@ -21,10 +21,12 @@
       "app.js",
       "styles.css",
       "sample.pdf",
-      "main.js"
+      "main.js",
+      "vendor/**/*"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "publisherName": "GhostEdit Developer"
     },
     "nsis": {
       "oneClick": true,

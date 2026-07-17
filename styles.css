@@ -1206,3 +1206,32 @@ body {
     font-weight: 600;
     color: var(--text-secondary);
 }
+
+/* Sidebar footer actions bar */
+.sidebar-actions-bar {
+    padding: 12px 16px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    gap: 8px;
+    background-color: rgba(9, 9, 11, 0.4);
+    z-index: 10;
+}
+.sidebar-actions-bar .action-btn {
+    flex: 1;
+    font-size: 12px;
+    padding: 8px 10px;
+    justify-content: center;
+    background-color: var(--bg-panel-hover);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    font-weight: 600;
+    transition: all 0.2s ease;
+}
+.sidebar-actions-bar .action-btn:hover {
+    background-color: var(--bg-active);
+    border-color: var(--text-secondary);
+}
+.sidebar-actions-bar .action-btn svg {
+    width: 14px;
+    height: 14px;
+}
