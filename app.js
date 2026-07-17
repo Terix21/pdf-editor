@@ -121,12 +121,21 @@ function initSelectors() {
     els.pageContainer = document.getElementById('page-container');
     els.pdfCanvas = document.getElementById('pdf-canvas');
     els.annotationCanvas = document.getElementById('annotation-canvas');
+    els.textLayer = document.getElementById('text-layer');
     els.textOverlayLayer = document.getElementById('text-overlay-layer');
     
     els.sidebarActionsBar = document.getElementById('sidebar-actions-bar');
     els.btnAddBlankPage = document.getElementById('btn-add-blank-page');
     els.btnAppendPdf = document.getElementById('btn-append-pdf');
     els.appendPdfSelector = document.getElementById('append-pdf-selector');
+    els.btnExtractPages = document.getElementById('btn-extract-pages');
+    
+    els.exportModal = document.getElementById('export-modal');
+    els.btnCloseExportModal = document.getElementById('btn-close-export-modal');
+    els.btnCancelExport = document.getElementById('btn-cancel-export');
+    els.btnConfirmExport = document.getElementById('btn-confirm-export');
+    els.exportFormatControl = document.getElementById('export-format-control');
+    els.exportDpiControl = document.getElementById('export-dpi-control');
 }
 
 // Initialize on page load
@@ -364,12 +373,24 @@ function setupEventListeners() {
 
     // Export Dropdown Trigger
     els.exportStandard.addEventListener('click', () => doExport(false));
-    els.exportSecure.addEventListener('click', () => doExport(true));
+    els.exportSecure.addEventListener('click', showExportModal);
+    
+    // Export Modal listeners
+    els.btnCloseExportModal.addEventListener('click', hideExportModal);
+    els.btnCancelExport.addEventListener('click', hideExportModal);
+    els.btnConfirmExport.addEventListener('click', triggerFlattenedExport);
+    
+    setupSegmentedControl(els.exportFormatControl);
+    setupSegmentedControl(els.exportDpiControl);
+    
+    // Page extraction
+    els.btnExtractPages.addEventListener('click', extractSelectedPages);
 
     // Canvas Mouse listeners for drawing/redacting/selecting
     els.annotationCanvas.addEventListener('mousedown', handleMouseDown);
     els.annotationCanvas.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', handleMouseUp);
+    els.pageContainer.addEventListener('mouseup', handleTextSelection);
 }
 
 // Show loading indicator
@@ -720,6 +741,28 @@ async function renderCurrentPage() {
             }
         }
         
+        // Clear and render text layer for text selection
+        els.textLayer.innerHTML = '';
+        els.textLayer.style.width = `${width}px`;
+        els.textLayer.style.height = `${height}px`;
+        
+        if (pageData.originalIndex !== -1 && page && viewport) {
+            try {
+                const textContent = await page.getTextContent();
+                const textLayerTask = pdfjsLib.renderTextLayer({
+                    textContent: textContent,
+                    container: els.textLayer,
+                    viewport: viewport,
+                    textDivs: []
+                });
+                if (textLayerTask && textLayerTask.promise) {
+                    await textLayerTask.promise;
+                }
+            } catch (textErr) {
+                console.error('Text layer rendering failed:', textErr);
+            }
+        }
+        
         // Render annotation overlays
         redrawAnnotations();
         syncTextAnnotations();
@@ -745,12 +788,18 @@ async function renderThumbnails() {
         card.setAttribute('data-page-id', pageId);
         
         card.innerHTML = `
+            <div class="thumbnail-checkbox-container">
+                <input type="checkbox" class="thumbnail-select-checkbox" data-page-id="${pageId}" title="Select Page">
+            </div>
             <div class="thumbnail-canvas-container">
                 <canvas></canvas>
             </div>
             <div class="thumbnail-info">
                 <span class="thumbnail-index">Page ${i + 1}</span>
                 <div class="thumbnail-actions">
+                    <button class="thumbnail-btn btn-duplicate" title="Duplicate Page">
+                        <i data-lucide="copy"></i>
+                    </button>
                     <button class="thumbnail-btn btn-rotate" title="Rotate 90°">
                         <i data-lucide="rotate-cw"></i>
                     </button>
@@ -766,9 +815,20 @@ async function renderThumbnails() {
         const canvas = card.querySelector('canvas');
         renderThumbnailPage(pageData.originalIndex, pageData.rotation, canvas);
         
+        // Stop propagation on checkbox container clicks
+        card.querySelector('.thumbnail-checkbox-container').addEventListener('click', (e) => {
+            e.stopPropagation();
+        });
+        
+        // Checkbox change listener
+        const checkbox = card.querySelector('.thumbnail-select-checkbox');
+        checkbox.addEventListener('change', () => {
+            updateExtractButtonState();
+        });
+        
         // Click to navigate
         card.addEventListener('click', (e) => {
-            if (e.target.closest('.thumbnail-btn')) return; // Ignore buttons
+            if (e.target.closest('.thumbnail-btn') || e.target.closest('.thumbnail-checkbox-container')) return;
             const idx = state.pageOrder.indexOf(pageId);
             if (idx !== -1) {
                 state.currentPageIndex = idx;
@@ -776,6 +836,12 @@ async function renderThumbnails() {
                 renderCurrentPage();
                 highlightActiveThumbnail();
             }
+        });
+        
+        // Duplicate Action
+        card.querySelector('.btn-duplicate').addEventListener('click', (e) => {
+            e.stopPropagation();
+            duplicatePage(pageId);
         });
         
         // Rotate Action
@@ -790,6 +856,8 @@ async function renderThumbnails() {
             deletePage(pageId);
         });
     }
+    
+    updateExtractButtonState();
     
     lucide.createIcons();
     setupThumbnailSorting();
@@ -1222,6 +1290,58 @@ function handleMouseUp(e) {
     }
 }
 
+function handleTextSelection(e) {
+    if (state.activeTool !== 'highlight' && state.activeTool !== 'redact') return;
+    
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
+    
+    const range = sel.getRangeAt(0);
+    if (!els.textLayer || !els.textLayer.contains(range.commonAncestorContainer)) return;
+    
+    const pageId = getCurrentPageId();
+    if (!pageId) return;
+    
+    const rects = range.getClientRects();
+    if (rects.length === 0) return;
+    
+    saveHistory();
+    const pageRect = els.pageContainer.getBoundingClientRect();
+    const pageData = state.pages[pageId];
+    
+    const type = state.activeTool;
+    const color = type === 'redact' ? '#000000' : state.activeColor;
+    const opacity = type === 'redact' ? 1.0 : 0.4;
+    
+    let added = false;
+    for (let i = 0; i < rects.length; i++) {
+        const r = rects[i];
+        if (r.width < 0.5 || r.height < 0.5) continue;
+        
+        const x = ((r.left - pageRect.left) / pageRect.width) * 100;
+        const y = ((r.top - pageRect.top) / pageRect.height) * 100;
+        const w = (r.width / pageRect.width) * 100;
+        const h = (r.height / pageRect.height) * 100;
+        
+        pageData.annotations.push({
+            id: generateId(),
+            type: type,
+            x: x,
+            y: y,
+            w: w,
+            h: h,
+            color: color,
+            opacity: opacity
+        });
+        added = true;
+    }
+    
+    if (added) {
+        sel.removeAllRanges();
+        redrawAnnotations();
+    }
+}
+
 // Click detection algorithm
 function getAnnotationAt(x, y) {
     const pageId = getCurrentPageId();
@@ -1639,17 +1759,16 @@ async function exportStandardPDF() {
 }
 
 // EXPORT 2: Secure Rasterized Flattened PDF
-async function exportFlattenedPDF() {
+async function exportFlattenedPDF(format = 'image/jpeg', renderScale = 2.0) {
     const exportDoc = await PDFLib.PDFDocument.create();
     
     for (let i = 0; i < state.pageOrder.length; i++) {
         const pageId = state.pageOrder[i];
         const pageData = state.pages[pageId];
         
-        // Step 1: Render original PDF page at 2.0x scale onto canvas
+        // Step 1: Render original PDF page at configured scale onto canvas
         const tempCanvas = document.createElement('canvas');
         const ctx = tempCanvas.getContext('2d');
-        const renderScale = 2.0;
         let pWidth = 595.27;
         let pHeight = 841.89;
         
@@ -1741,14 +1860,16 @@ async function exportFlattenedPDF() {
         });
         ctx.globalAlpha = 1.0; // Reset
         
-        // Step 3: Extract rasterized canvas image (JPEG)
-        // High quality JPEG compression (0.92) to keep files reasonably sized but crisp
-        const imgDataUrl = tempCanvas.toDataURL('image/jpeg', 0.92);
-        
-        // Step 4: Add blank page with original dimensions to pdf-lib and draw raster image
+        // Step 3: Extract rasterized canvas image and Step 4: Add page to pdf-lib
         const newPage = exportDoc.addPage([pWidth, pHeight]);
-        
-        const embedImg = await exportDoc.embedJpg(imgDataUrl);
+        let embedImg;
+        if (format === 'image/png') {
+            const imgDataUrl = tempCanvas.toDataURL('image/png');
+            embedImg = await exportDoc.embedPng(imgDataUrl);
+        } else {
+            const imgDataUrl = tempCanvas.toDataURL('image/jpeg', 0.92);
+            embedImg = await exportDoc.embedJpg(imgDataUrl);
+        }
         newPage.drawImage(embedImg, {
             x: 0,
             y: 0,
@@ -1999,4 +2120,253 @@ async function handleAppendPDF(e) {
         }
     };
     reader.readAsArrayBuffer(file);
+}
+
+// Export modal controls
+function showExportModal() {
+    if (!state.pdfBytes) return;
+    els.exportModal.style.display = 'flex';
+}
+
+function hideExportModal() {
+    els.exportModal.style.display = 'none';
+}
+
+function setupSegmentedControl(container) {
+    if (!container) return;
+    const buttons = container.querySelectorAll('.seg-btn');
+    buttons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            buttons.forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        });
+    });
+}
+
+async function triggerFlattenedExport() {
+    hideExportModal();
+    
+    // Find active segmented control values
+    const formatBtn = els.exportFormatControl.querySelector('.seg-btn.active');
+    const dpiBtn = els.exportDpiControl.querySelector('.seg-btn.active');
+    
+    const formatValue = formatBtn ? formatBtn.getAttribute('data-value') : 'png';
+    const scaleValue = dpiBtn ? parseFloat(dpiBtn.getAttribute('data-value')) : 2.0;
+    
+    const mimeType = formatValue === 'png' ? 'image/png' : 'image/jpeg';
+    
+    showLoading('Generating Secure Flattened PDF (re-rasterizing pages)...');
+    
+    try {
+        const exportBytes = await exportFlattenedPDF(mimeType, scaleValue);
+        
+        // Trigger download
+        const blob = new Blob([exportBytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        
+        const baseName = state.fileName.replace('.pdf', '');
+        const formatSuffix = formatValue === 'png' ? '_png' : '_jpg';
+        const dpiSuffix = scaleValue === 1.0 ? '_72dpi' : scaleValue === 2.0 ? '_150dpi' : '_300dpi';
+        const suffix = `_secure_flattened${formatSuffix}${dpiSuffix}.pdf`;
+        
+        link.href = url;
+        link.download = `${baseName}${suffix}`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        showToast(`Secure document exported!`);
+    } catch (err) {
+        console.error(err);
+        showToast('Secure export failed.', 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+// Page management helpers
+function duplicatePage(pageId) {
+    if (!state.pdfBytes) return;
+    
+    saveHistory();
+    
+    const pageIndex = state.pageOrder.indexOf(pageId);
+    if (pageIndex === -1) return;
+    
+    const originalPage = state.pages[pageId];
+    const newPageId = `page-${Date.now()}-dup-${Math.random().toString(36).substr(2, 5)}`;
+    
+    // Deep clone page config
+    const clonedPage = {
+        id: newPageId,
+        originalIndex: originalPage.originalIndex,
+        rotation: originalPage.rotation,
+        annotations: JSON.parse(JSON.stringify(originalPage.annotations))
+    };
+    
+    clonedPage.annotations.forEach(ann => {
+        ann.id = generateId();
+    });
+    
+    state.pages[newPageId] = clonedPage;
+    state.pageOrder.splice(pageIndex + 1, 0, newPageId);
+    state.currentPageIndex = pageIndex + 1;
+    
+    deselectAnnotation();
+    renderCurrentPage();
+    renderThumbnails();
+    showToast('Page duplicated.');
+}
+
+function updateExtractButtonState() {
+    const checkedBoxes = els.thumbnailContainer.querySelectorAll('.thumbnail-select-checkbox:checked');
+    if (checkedBoxes.length > 0) {
+        els.btnExtractPages.disabled = false;
+        els.btnExtractPages.style.opacity = '1';
+        els.btnExtractPages.style.pointerEvents = 'auto';
+    } else {
+        els.btnExtractPages.disabled = true;
+        els.btnExtractPages.style.opacity = '0.5';
+        els.btnExtractPages.style.pointerEvents = 'none';
+    }
+}
+
+async function extractSelectedPages() {
+    const checkedBoxes = els.thumbnailContainer.querySelectorAll('.thumbnail-select-checkbox:checked');
+    if (checkedBoxes.length === 0) return;
+    
+    const pagesToExtract = Array.from(checkedBoxes).map(cb => cb.getAttribute('data-page-id'));
+    
+    showLoading('Extracting pages to new document...');
+    
+    try {
+        const srcDoc = await PDFLib.PDFDocument.load(state.pdfBytes);
+        const extractDoc = await PDFLib.PDFDocument.create();
+        
+        const helveticaFont = await extractDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+        
+        for (let i = 0; i < pagesToExtract.length; i++) {
+            const pageId = pagesToExtract[i];
+            const pageData = state.pages[pageId];
+            
+            let page;
+            if (pageData.originalIndex === -1) {
+                let pWidth = 595.27;
+                let pHeight = 841.89;
+                if (srcDoc.getPageCount() > 0) {
+                    const size = srcDoc.getPage(0).getSize();
+                    pWidth = size.width;
+                    pHeight = size.height;
+                }
+                page = extractDoc.addPage([pWidth, pHeight]);
+            } else {
+                const copied = await extractDoc.copyPages(srcDoc, [pageData.originalIndex]);
+                page = copied[0];
+            }
+            
+            page.setRotation(PDFLib.degrees(pageData.rotation));
+            
+            const { width, height } = page.getSize();
+            const annotations = pageData.annotations;
+            
+            for (const ann of annotations) {
+                const rot = pageData.rotation;
+                
+                if (ann.type === 'highlight' || ann.type === 'redact') {
+                    const rectBounds = mapBrowserRectToPDFRect(ann.x, ann.y, ann.w, ann.h, width, height, rot);
+                    const colorRGB = hexToRGB(ann.color);
+                    
+                    page.drawRectangle({
+                        x: rectBounds.x,
+                        y: rectBounds.y,
+                        width: rectBounds.w,
+                        height: rectBounds.h,
+                        color: PDFLib.rgb(colorRGB.r, colorRGB.g, colorRGB.b),
+                        opacity: ann.opacity
+                    });
+                } 
+                else if (ann.type === 'draw') {
+                    const colorRGB = hexToRGB(ann.color);
+                    const pdfColor = PDFLib.rgb(colorRGB.r, colorRGB.g, colorRGB.b);
+                    const thickness = ann.thickness * 0.75;
+                    
+                    for (let j = 0; j < ann.points.length - 1; j++) {
+                        const p1 = mapBrowserPointToPDF(ann.points[j].x, ann.points[j].y, width, height, rot);
+                        const p2 = mapBrowserPointToPDF(ann.points[j+1].x, ann.points[j+1].y, width, height, rot);
+                        
+                        page.drawLine({
+                            start: p1,
+                            end: p2,
+                            thickness: thickness,
+                            color: pdfColor,
+                            opacity: ann.opacity
+                        });
+                    }
+                }
+                else if (ann.type === 'text') {
+                    const colorRGB = hexToRGB(ann.color);
+                    const textPos = mapBrowserPointToPDF(ann.x, ann.y, width, height, rot);
+                    const baseTextSize = ann.size * 0.75;
+                    
+                    const lines = ann.content.split('\n');
+                    let maxLineWidth = 0;
+                    lines.forEach(line => {
+                        const w = helveticaFont.widthOfTextAtSize(line, baseTextSize);
+                        if (w > maxLineWidth) maxLineWidth = w;
+                    });
+                    
+                    const lineHeight = baseTextSize * 1.2;
+                    
+                    lines.forEach((line, idx) => {
+                        const lineWidth = helveticaFont.widthOfTextAtSize(line, baseTextSize);
+                        let lineX = textPos.x;
+                        
+                        if (ann.align === 'center') {
+                            lineX = textPos.x + (maxLineWidth - lineWidth) / 2;
+                        } else if (ann.align === 'right') {
+                            lineX = textPos.x + (maxLineWidth - lineWidth);
+                        }
+                        
+                        const lineY = textPos.y - baseTextSize - (idx * lineHeight);
+                        
+                        page.drawText(line, {
+                            x: lineX,
+                            y: lineY,
+                            size: baseTextSize,
+                            font: helveticaFont,
+                            color: PDFLib.rgb(colorRGB.r, colorRGB.g, colorRGB.b)
+                        });
+                    });
+                }
+            }
+            
+            extractDoc.addPage(page);
+        }
+        
+        const extractBytes = await extractDoc.save();
+        
+        // Trigger download
+        const blob = new Blob([extractBytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        
+        const baseName = state.fileName.replace('.pdf', '');
+        const suffix = `_extracted_${Date.now()}.pdf`;
+        
+        link.href = url;
+        link.download = `${baseName}${suffix}`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        
+        showToast('Extracted document downloaded!');
+    } catch (err) {
+        console.error(err);
+        showToast('Failed to extract pages.', 'error');
+    } finally {
+        hideLoading();
+    }
 }

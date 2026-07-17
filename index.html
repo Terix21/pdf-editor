@@ -75,6 +75,7 @@
             <!-- EXPORT ACTIONS -->
             <div class="toolbar-actions">
                 <input type="file" id="file-selector" accept=".pdf" style="display: none;">
+                <input type="file" id="append-pdf-selector" accept=".pdf" style="display: none;">
                 <button class="primary-btn" id="btn-upload">
                     <i data-lucide="upload"></i>
                     <span>Open PDF</span>
@@ -126,6 +127,20 @@
                         <i data-lucide="files" class="empty-icon"></i>
                         <p>No document loaded</p>
                     </div>
+                </div>
+                <div class="sidebar-actions-bar" id="sidebar-actions-bar" style="display: none;">
+                    <button class="action-btn" id="btn-add-blank-page" title="Insert Blank Page">
+                        <i data-lucide="plus-circle"></i>
+                        <span>Blank Page</span>
+                    </button>
+                    <button class="action-btn" id="btn-append-pdf" title="Append Another PDF">
+                        <i data-lucide="file-plus-2"></i>
+                        <span>Append PDF</span>
+                    </button>
+                    <button class="action-btn" id="btn-extract-pages" title="Extract Selected Pages" disabled style="opacity: 0.5; pointer-events: none;">
+                        <i data-lucide="external-link"></i>
+                        <span>Extract</span>
+                    </button>
                 </div>
             </aside>
 
@@ -180,6 +195,9 @@
                         
                         <!-- Middle layer: Drawing & overlay canvas -->
                         <canvas id="annotation-canvas"></canvas>
+                        
+                        <!-- Middle-Top layer: Text selection layer -->
+                        <div id="text-layer" class="textLayer"></div>
                         
                         <!-- Top layer: Text elements layer -->
                         <div id="text-overlay-layer"></div>
@@ -287,6 +305,40 @@
                 </div>
             </aside>
         </main>
+    </div>
+
+    <!-- EXPORT SETTINGS MODAL -->
+    <div class="modal-overlay" id="export-modal" style="display: none;">
+        <div class="glass-card modal-card">
+            <div class="modal-header">
+                <h2>Secure Flattening Settings</h2>
+                <button class="close-modal-btn" id="btn-close-export-modal"><i data-lucide="x"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-desc">Secure Redaction rasterizes all pages into flat images to make underlying text completely un-extractable.</p>
+                
+                <div class="control-group">
+                    <label>Image Format</label>
+                    <div class="segmented-control" id="export-format-control">
+                        <button class="seg-btn active" data-value="png">PNG (Sharp Text)</button>
+                        <button class="seg-btn" data-value="jpeg">JPEG (Smaller File)</button>
+                    </div>
+                </div>
+                
+                <div class="control-group" style="margin-top: 16px;">
+                    <label>Resolution (DPI)</label>
+                    <div class="segmented-control" id="export-dpi-control">
+                        <button class="seg-btn" data-value="1.0">72 DPI (Draft)</button>
+                        <button class="seg-btn active" data-value="2.0">150 DPI (Standard)</button>
+                        <button class="seg-btn" data-value="4.0">300 DPI (High Res)</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;">
+                <button class="action-btn" id="btn-cancel-export">Cancel</button>
+                <button class="primary-btn" id="btn-confirm-export">Export PDF</button>
+            </div>
+        </div>
     </div>
 
     <!-- TOAST NOTIFICATION CONTAINER -->
