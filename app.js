@@ -122,6 +122,11 @@ function initSelectors() {
     els.pdfCanvas = document.getElementById('pdf-canvas');
     els.annotationCanvas = document.getElementById('annotation-canvas');
     els.textOverlayLayer = document.getElementById('text-overlay-layer');
+    
+    els.sidebarActionsBar = document.getElementById('sidebar-actions-bar');
+    els.btnAddBlankPage = document.getElementById('btn-add-blank-page');
+    els.btnAppendPdf = document.getElementById('btn-append-pdf');
+    els.appendPdfSelector = document.getElementById('append-pdf-selector');
 }
 
 // Initialize on page load
@@ -175,6 +180,7 @@ window.addEventListener('DOMContentLoaded', () => {
                 els.btnZoomOut.disabled = false;
                 els.btnFitWidth.disabled = false;
                 els.btnFitPage.disabled = false;
+                els.sidebarActionsBar.style.display = 'flex';
                 
                 els.leftSidebar.classList.remove('collapsed');
                 const icon = els.btnToggleSidebar.querySelector('i, svg');
@@ -350,6 +356,11 @@ function setupEventListeners() {
     els.btnUndo.addEventListener('click', undo);
     els.btnRedo.addEventListener('click', redo);
     els.btnCloseFile.addEventListener('click', closeCurrentFile);
+    
+    // Sidebar footer actions
+    els.btnAddBlankPage.addEventListener('click', insertBlankPage);
+    els.btnAppendPdf.addEventListener('click', () => els.appendPdfSelector.click());
+    els.appendPdfSelector.addEventListener('change', handleAppendPDF);
 
     // Export Dropdown Trigger
     els.exportStandard.addEventListener('click', () => doExport(false));
@@ -454,6 +465,7 @@ function handleFile(file) {
             els.btnZoomOut.disabled = false;
             els.btnFitWidth.disabled = false;
             els.btnFitPage.disabled = false;
+            els.sidebarActionsBar.style.display = 'flex';
             
             els.leftSidebar.classList.remove('collapsed');
             const icon = els.btnToggleSidebar.querySelector('i, svg');
@@ -498,6 +510,7 @@ function closeCurrentFile() {
     els.fileInfoBadge.style.display = 'none';
     els.exportDropdown.style.display = 'none';
     els.btnCloseFile.style.display = 'none';
+    els.sidebarActionsBar.style.display = 'none';
     
     // Disable edit tools
     els.editToolsGroup.style.pointerEvents = 'none';
@@ -637,51 +650,74 @@ async function renderCurrentPage() {
     const pageData = state.pages[pageId];
     
     try {
-        const page = await state.pdfJS.getPage(pageData.originalIndex + 1);
+        let width = 595.27 * state.scale;
+        let height = 841.89 * state.scale;
+        let viewport = null;
+        let page = null;
         
-        // Calculate viewport
-        const viewport = page.getViewport({ scale: state.scale, rotation: pageData.rotation });
+        if (pageData.originalIndex === -1) {
+            // Find another page size in document if available
+            const refPageId = state.pageOrder.find(id => state.pages[id].originalIndex !== -1);
+            if (refPageId) {
+                const refPage = await state.pdfJS.getPage(state.pages[refPageId].originalIndex + 1);
+                const refViewport = refPage.getViewport({ scale: state.scale, rotation: state.pages[refPageId].rotation });
+                width = refViewport.width;
+                height = refViewport.height;
+            }
+        } else {
+            page = await state.pdfJS.getPage(pageData.originalIndex + 1);
+            viewport = page.getViewport({ scale: state.scale, rotation: pageData.rotation });
+            width = viewport.width;
+            height = viewport.height;
+        }
         
         // Setup canvases dimensions
-        els.pageContainer.style.width = `${viewport.width}px`;
-        els.pageContainer.style.height = `${viewport.height}px`;
+        els.pageContainer.style.width = `${width}px`;
+        els.pageContainer.style.height = `${height}px`;
         
-        els.pdfCanvas.width = viewport.width;
-        els.pdfCanvas.height = viewport.height;
+        els.pdfCanvas.width = width;
+        els.pdfCanvas.height = height;
         els.pdfCanvas.style.width = '100%';
         els.pdfCanvas.style.height = '100%';
         
-        els.annotationCanvas.width = viewport.width;
-        els.annotationCanvas.height = viewport.height;
+        els.annotationCanvas.width = width;
+        els.annotationCanvas.height = height;
         els.annotationCanvas.style.width = '100%';
         els.annotationCanvas.style.height = '100%';
         
-        // Render PDF contents on bottom canvas
         const canvasCtx = els.pdfCanvas.getContext('2d');
-        const renderContext = {
-            canvasContext: canvasCtx,
-            viewport: viewport
-        };
         
-        if (state.currentRenderTask) {
+        if (pageData.originalIndex === -1) {
+            // Fill with white for blank page
+            canvasCtx.fillStyle = '#ffffff';
+            canvasCtx.fillRect(0, 0, width, height);
+        } else {
+            // Render PDF contents on bottom canvas
+            const renderContext = {
+                canvasContext: canvasCtx,
+                viewport: viewport
+            };
+            
+            if (state.currentRenderTask) {
+                try {
+                    state.currentRenderTask.cancel();
+                } catch (cErr) {
+                    // Ignore cancellation error
+                }
+            }
+            
+            state.currentRenderTask = page.render(renderContext);
+            
             try {
-                state.currentRenderTask.cancel();
-            } catch (cErr) {
-                // Ignore cancellation error
+                await state.currentRenderTask.promise;
+                state.currentRenderTask = null;
+            } catch (renderErr) {
+                if (renderErr.name === 'RenderingCancelledException') {
+                    // Expected cancellation, don't show error toast or throw
+                    return;
+                }
+                throw renderErr;
             }
-        }
-        
-        state.currentRenderTask = page.render(renderContext);
-        
-        try {
-            await state.currentRenderTask.promise;
-            state.currentRenderTask = null;
-        } catch (renderErr) {
-            if (renderErr.name === 'RenderingCancelledException') {
-                // Expected cancellation, don't show error toast or throw
-                return;
-            }
-            throw renderErr;
         }
         
         // Render annotation overlays
@@ -762,6 +798,15 @@ async function renderThumbnails() {
 // Quick thumbnail page renderer
 async function renderThumbnailPage(originalIndex, rotation, canvas) {
     try {
+        if (originalIndex === -1) {
+            canvas.width = 100;
+            canvas.height = 141; // Standard A4 aspect ratio
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            return;
+        }
+        
         const page = await state.pdfJS.getPage(originalIndex + 1);
         const viewport = page.getViewport({ scale: 0.2, rotation });
         
@@ -1484,16 +1529,26 @@ async function exportStandardPDF() {
     const srcDoc = await PDFLib.PDFDocument.load(state.pdfBytes);
     const exportDoc = await PDFLib.PDFDocument.create();
     
-    // Copy the pages in reordered sequence
-    const indicesToCopy = state.pageOrder.map(pageId => state.pages[pageId].originalIndex);
-    const copiedPages = await exportDoc.copyPages(srcDoc, indicesToCopy);
-    
     const helveticaFont = await exportDoc.embedFont(PDFLib.StandardFonts.Helvetica);
     
-    for (let i = 0; i < copiedPages.length; i++) {
-        const page = copiedPages[i];
+    for (let i = 0; i < state.pageOrder.length; i++) {
         const pageId = state.pageOrder[i];
         const pageData = state.pages[pageId];
+        
+        let page;
+        if (pageData.originalIndex === -1) {
+            let pWidth = 595.27;
+            let pHeight = 841.89;
+            if (srcDoc.getPageCount() > 0) {
+                const size = srcDoc.getPage(0).getSize();
+                pWidth = size.width;
+                pHeight = size.height;
+            }
+            page = exportDoc.addPage([pWidth, pHeight]);
+        } else {
+            const copied = await exportDoc.copyPages(srcDoc, [pageData.originalIndex]);
+            page = copied[0];
+        }
         
         // Apply page rotations
         page.setRotation(PDFLib.degrees(pageData.rotation));
@@ -1592,20 +1647,38 @@ async function exportFlattenedPDF() {
         const pageData = state.pages[pageId];
         
         // Step 1: Render original PDF page at 2.0x scale onto canvas
-        const page = await state.pdfJS.getPage(pageData.originalIndex + 1);
-        const renderScale = 2.0; // High resolution for reading quality (144 DPI)
-        const viewport = page.getViewport({ scale: renderScale, rotation: pageData.rotation });
-        
         const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = viewport.width;
-        tempCanvas.height = viewport.height;
         const ctx = tempCanvas.getContext('2d');
+        const renderScale = 2.0;
+        let pWidth = 595.27;
+        let pHeight = 841.89;
         
-        // Render background PDF page
-        await page.render({
-            canvasContext: ctx,
-            viewport: viewport
-        }).promise;
+        if (pageData.originalIndex === -1) {
+            if (state.pdfJS) {
+                try {
+                    const refPage = await state.pdfJS.getPage(1);
+                    const refViewport = refPage.getViewport({ scale: 1.0 });
+                    pWidth = refViewport.width;
+                    pHeight = refViewport.height;
+                } catch (e) {}
+            }
+            tempCanvas.width = pWidth * renderScale;
+            tempCanvas.height = pHeight * renderScale;
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+        } else {
+            const page = await state.pdfJS.getPage(pageData.originalIndex + 1);
+            const viewport = page.getViewport({ scale: renderScale, rotation: pageData.rotation });
+            tempCanvas.width = viewport.width;
+            tempCanvas.height = viewport.height;
+            pWidth = viewport.width / renderScale;
+            pHeight = viewport.height / renderScale;
+            
+            await page.render({
+                canvasContext: ctx,
+                viewport: viewport
+            }).promise;
+        }
         
         // Step 2: Overlay all drawings, highlights, and redactions on top of this high-res canvas
         const annotations = pageData.annotations;
@@ -1673,15 +1746,14 @@ async function exportFlattenedPDF() {
         const imgDataUrl = tempCanvas.toDataURL('image/jpeg', 0.92);
         
         // Step 4: Add blank page with original dimensions to pdf-lib and draw raster image
-        const origViewport = page.getViewport({ scale: 1.0, rotation: pageData.rotation });
-        const newPage = exportDoc.addPage([origViewport.width, origViewport.height]);
+        const newPage = exportDoc.addPage([pWidth, pHeight]);
         
         const embedImg = await exportDoc.embedJpg(imgDataUrl);
         newPage.drawImage(embedImg, {
             x: 0,
             y: 0,
-            width: origViewport.width,
-            height: origViewport.height
+            width: pWidth,
+            height: pHeight
         });
     }
     
@@ -1783,4 +1855,148 @@ function hexToRGB(hex) {
         g: ((rgb >> 8) & 0xff) / 255,
         b: (rgb & 0xff) / 255
     };
+}
+
+// Page insertion operations
+function insertBlankPage() {
+    if (!state.pdfBytes) return;
+    
+    saveHistory();
+    
+    const pageId = `page-${Date.now()}-blank`;
+    
+    // Insert after current page, or at end if no pages
+    const insertIdx = state.pageOrder.length > 0 ? state.currentPageIndex + 1 : 0;
+    
+    state.pages[pageId] = {
+        id: pageId,
+        originalIndex: -1,
+        rotation: 0,
+        annotations: []
+    };
+    
+    state.pageOrder.splice(insertIdx, 0, pageId);
+    state.currentPageIndex = insertIdx;
+    
+    renderCurrentPage();
+    renderThumbnails();
+    showToast('Blank page inserted.');
+}
+
+async function handleAppendPDF(e) {
+    if (e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    
+    if (file.type !== 'application/pdf' && !file.name.endsWith('.pdf')) {
+        showToast('Only PDF files are supported.', 'error');
+        return;
+    }
+    
+    showLoading('Appending PDF pages locally...');
+    
+    const reader = new FileReader();
+    reader.onload = async function(evt) {
+        try {
+            const appendedBytes = evt.target.result;
+            
+            // Step 1: Load documents in PDF-Lib
+            const docA = await PDFLib.PDFDocument.load(state.pdfBytes);
+            const docB = await PDFLib.PDFDocument.load(appendedBytes);
+            const mergedDoc = await PDFLib.PDFDocument.create();
+            
+            // Step 2: Copy existing page sequence (applying rotations to the structure)
+            for (let i = 0; i < state.pageOrder.length; i++) {
+                const pageId = state.pageOrder[i];
+                const pageData = state.pages[pageId];
+                
+                let page;
+                if (pageData.originalIndex === -1) {
+                    // Create a blank page
+                    let pWidth = 595.27;
+                    let pHeight = 841.89;
+                    if (docA.getPageCount() > 0) {
+                        const size = docA.getPage(0).getSize();
+                        pWidth = size.width;
+                        pHeight = size.height;
+                    }
+                    page = mergedDoc.addPage([pWidth, pHeight]);
+                } else {
+                    const copied = await mergedDoc.copyPages(docA, [pageData.originalIndex]);
+                    page = copied[0];
+                }
+                
+                // Bake in rotation so rotation state resets to 0 in the new PDF structure
+                if (pageData.rotation !== 0) {
+                    page.setRotation(PDFLib.degrees((page.getRotation().angle + pageData.rotation) % 360));
+                }
+                
+                mergedDoc.addPage(page);
+            }
+            
+            // Step 3: Append all pages from the new PDF
+            const docBPagesCount = docB.getPageCount();
+            const copiedBPages = await mergedDoc.copyPages(docB, Array.from({ length: docBPagesCount }, (_, i) => i));
+            copiedBPages.forEach(page => mergedDoc.addPage(page));
+            
+            // Save history for undo
+            saveHistory();
+            
+            // Save merged PDF bytes
+            state.pdfBytes = await mergedDoc.save();
+            
+            // Step 4: Reload PDF.js with the merged bytes
+            state.pdfJS = await pdfjsLib.getDocument({ data: state.pdfBytes.slice(0) }).promise;
+            
+            // Step 5: Update state.pages and state.pageOrder
+            const newPageOrder = [];
+            const newPages = {};
+            
+            // Map existing pages to their new original indices (0 to N-1)
+            for (let i = 0; i < state.pageOrder.length; i++) {
+                const pageId = state.pageOrder[i];
+                newPages[pageId] = {
+                    id: pageId,
+                    originalIndex: i,
+                    rotation: 0, // Reset since rotation was baked into the new PDF structure
+                    annotations: state.pages[pageId].annotations
+                };
+                newPageOrder.push(pageId);
+            }
+            
+            // Add new pages (N to N+M-1)
+            const existingCount = state.pageOrder.length;
+            for (let j = 0; j < docBPagesCount; j++) {
+                const pageId = `page-${Date.now()}-append-${j}`;
+                newPages[pageId] = {
+                    id: pageId,
+                    originalIndex: existingCount + j,
+                    rotation: 0,
+                    annotations: []
+                };
+                newPageOrder.push(pageId);
+            }
+            
+            state.pages = newPages;
+            state.pageOrder = newPageOrder;
+            
+            // Render
+            deselectAnnotation();
+            await renderCurrentPage();
+            await renderThumbnails();
+            
+            // Update page count in UI
+            const totalPagesCount = state.pageOrder.length;
+            els.currentPageCount.textContent = `${totalPagesCount} page${totalPagesCount > 1 ? 's' : ''}`;
+            els.lblTotalPages.textContent = totalPagesCount;
+            
+            showToast('PDF appended successfully!');
+        } catch (err) {
+            console.error(err);
+            showToast('Failed to append PDF.', 'error');
+        } finally {
+            hideLoading();
+            e.target.value = ''; // Reset selector
+        }
+    };
+    reader.readAsArrayBuffer(file);
 }
